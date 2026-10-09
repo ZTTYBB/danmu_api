@@ -28,10 +28,6 @@ permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: ghcr-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
     # 只在自己的 fork 里跑，避免被上游同步带到别处误触发
@@ -42,13 +38,16 @@ jobs:
        (github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.head_branch == 'main'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: ghcr-${{ github.ref }}
+      cancel-in-progress: true
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Fork Sync's head_sha precedes its merge. Read main after a successful sync.
-          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.sha }}
+          # Read current main even when the triggering event predates a successful sync.
+          ref: main
 
       - name: Record checked-out revision
         id: source
@@ -105,6 +104,7 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ env.IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
           echo "${{ env.IMAGE }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ env.IMAGE }}:${{ steps.source.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "Image digest: \`${{ steps.image.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
