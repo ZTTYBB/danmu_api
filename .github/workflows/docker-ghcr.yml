@@ -104,7 +104,6 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ env.IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
           echo "${{ env.IMAGE }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ env.IMAGE }}:${{ steps.source.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "Image digest: \`${{ steps.image.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
