@@ -19,6 +19,8 @@ on:
   workflow_run:
     # Fork Sync 一完成立即触发构建，不再依赖每日 schedule（GitHub schedule 常延迟 3.5h+）
     workflows: ["Fork Sync"]
+    branches:
+      - main
     types:
       - completed
 
@@ -33,16 +35,26 @@ concurrency:
 jobs:
   build:
     # 只在自己的 fork 里跑，避免被上游同步带到别处误触发
-    if: github.repository_owner == 'ZTTYBB'
+    if: >-
+      github.repository == 'ZTTYBB/danmu_api' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'))
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # workflow_run 触发时 github.sha 未必是 merge 后的最新 commit，
-          # 显式 checkout 触发 workflow（Fork Sync）的 head SHA；其他触发方式回退 github.sha
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # Fork Sync's head_sha precedes its merge. Read main after a successful sync.
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.sha }}
+
+      - name: Record checked-out revision
+        id: source
+        shell: bash
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # 版本号来源与上游 docker-image.yml 保持一致
       - name: Read version from globals.js
@@ -69,6 +81,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push
+        id: image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -78,7 +91,11 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ env.VERSION }}
-            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:${{ steps.source.outputs.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -88,4 +105,6 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ env.IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
           echo "${{ env.IMAGE }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ env.IMAGE }}:${{ steps.source.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "Image digest: \`${{ steps.image.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY

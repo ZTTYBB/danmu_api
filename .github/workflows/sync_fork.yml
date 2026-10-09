@@ -3,6 +3,10 @@ name: Fork Sync
 permissions:
     contents: write
 
+concurrency:
+    group: fork-sync-${{ github.repository }}
+    cancel-in-progress: false
+
 on:
     schedule:
         - cron: "0 0 * * *"  # 每天午夜执行
@@ -18,16 +22,47 @@ jobs:
             - name: Checkout target repo
               uses: actions/checkout@v4
               with:
-                token: ${{ secrets.GITHUB_TOKEN }}
+                ref: main
+                fetch-depth: 0
 
-            - name: Sync Upstream
-              uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
-              with:
-                  target_repo_token: ${{ secrets.GITHUB_TOKEN }}
-                  upstream_sync_repo: huangxd-/danmu_api
-                  upstream_sync_branch: main
-                  target_sync_branch: main
-                  test_mode: false
+            - name: Sync upstream while preserving fork workflows
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git fetch --no-tags origin main
+                  git checkout --detach origin/main
+                  base_sha="$(git rev-parse HEAD)"
+                  git fetch --no-tags https://github.com/huangxd-/danmu_api.git main
+                  upstream_sha="$(git rev-parse FETCH_HEAD)"
+
+                  if git merge-base --is-ancestor "$upstream_sha" HEAD; then
+                      echo "Already up to date with upstream." >> "$GITHUB_STEP_SUMMARY"
+                      exit 0
+                  fi
+
+                  if ! git merge --no-ff --no-commit "$upstream_sha"; then
+                      mapfile -d '' -t conflicts < <(git diff --name-only --diff-filter=U -z)
+                      if [ "${#conflicts[@]}" -eq 0 ]; then
+                          echo "::error::Upstream merge failed."
+                          exit 1
+                      fi
+                      for path in "${conflicts[@]}"; do
+                          if [[ "$path" != .github/workflows/* ]]; then
+                              echo "::error file=$path::Resolve this upstream merge conflict manually."
+                              exit 1
+                          fi
+                      done
+                  fi
+
+                  # Keep fork automation unchanged, including removal of new upstream workflows.
+                  # The merge still records upstream as a parent for the next incremental sync.
+                  git restore --source="$base_sha" --staged --worktree -- .github/workflows
+                  git diff --cached --exit-code "$base_sha" -- .github/workflows
+                  git commit --no-edit
+                  git push origin HEAD:refs/heads/main
+                  echo "Synced upstream $upstream_sha into $(git rev-parse HEAD)." >> "$GITHUB_STEP_SUMMARY"
 
             - name: Check for new commits
               if: success()
@@ -37,8 +72,8 @@ jobs:
               if: failure()
               run: |
                   echo "[Error] Sync failed. This might be due to:"
-                  echo "1. Changes in the upstream workflow file"
-                  echo "2. Merge conflicts that need manual resolution"
-                  echo "3. Network issues"
+                  echo "1. Merge conflicts outside .github/workflows"
+                  echo "2. A concurrent update to main"
+                  echo "3. Network or repository permission issues"
                   echo "Please check the logs and consider manual sync if needed."
                   exit 1
